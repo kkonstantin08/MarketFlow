@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart LR
-    Client["Swagger UI / HTTP-клиент"] --> API["ASP.NET Core Web API"]
+    Client["Swagger UI / демостраница / HTTP-клиент"] --> API["ASP.NET Core Web API"]
     API --> Logic["Каталог и складские операции"]
     Logic --> EF["EF Core + Npgsql"]
     EF --> PG[("PostgreSQL")]
