@@ -63,7 +63,11 @@ internal static class InventoryEndpoints
             var supply = await db.Supplies.AsNoTracking().SingleAsync(item => item.Id == supplyId, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return Results.Created($"/api/supplies/{supply.Id}", supply);
-        });
+        }).Produces<Supply>(StatusCodes.Status201Created)
+            .Produces<Supply>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict);
 
         app.MapPost("/api/reservations", async (CreateReservationRequest? request, MarketFlowDbContext db, CancellationToken cancellationToken) =>
         {
@@ -106,7 +110,10 @@ internal static class InventoryEndpoints
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return Results.Created($"/api/reservations/{reservation.Id}", reservation);
-        });
+        }).Produces<Reservation>(StatusCodes.Status201Created)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict);
 
         app.MapGet("/api/stocks", async (MarketFlowDbContext db, int? productId = null, int? warehouseId = null, int? limit = null, int? offset = null, CancellationToken cancellationToken = default) =>
         {

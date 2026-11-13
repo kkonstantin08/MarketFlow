@@ -65,6 +65,34 @@ public sealed class ProductWarehouseTests : IAsyncLifetime
         Assert.Single(products!);
     }
 
+    [Theory]
+    [InlineData("/api/products")]
+    [InlineData("/api/warehouses")]
+    [InlineData("/api/products?q=%00")]
+    public async Task Catalog_rejects_null_characters(string path)
+    {
+        using var response = path.Contains('?')
+            ? await _client.GetAsync(path)
+            : await _client.PostAsJsonAsync(path, new { name = "Invalid\0name", sku = "BAD-NAME" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Theory]
+    [InlineData("supplies")]
+    [InlineData("reservations")]
+    public async Task Inventory_rejects_quoted_quantities(string resource)
+    {
+        var (productId, warehouseId) = await CreateCatalogPair();
+        using var response = await _client.PostAsJsonAsync($"/api/{resource}",
+            new { reference = "NUMERIC-STRING", productId, warehouseId, quantity = "1" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Empty((await _client.GetFromJsonAsync<MovementResponse[]>("/api/stock-movements"))!);
+    }
+
     [Fact]
     public async Task Product_search_trims_query_and_rejects_values_over_120_characters()
     {

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using MarketFlow.Api;
+using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("MarketFlow")
@@ -8,6 +9,8 @@ builder.Services.AddDbContext<MarketFlowDbContext>(options => options.UseNpgsql(
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddProblemDetails();
 builder.Services.AddSwaggerGen();
+builder.Services.ConfigureHttpJsonOptions(options =>
+    options.SerializerOptions.NumberHandling = JsonNumberHandling.Strict);
 
 var app = builder.Build();
 app.UseExceptionHandler();

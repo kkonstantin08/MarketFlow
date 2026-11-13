@@ -26,7 +26,9 @@ internal static class CatalogEndpoints
             }
 
             return Results.Created($"/api/products/{product.Id}", product);
-        });
+        }).Produces<Product>(StatusCodes.Status201Created)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status409Conflict);
 
         app.MapGet("/api/products/{id:int}", async (int id, MarketFlowDbContext db, CancellationToken cancellationToken) =>
         {
@@ -42,6 +44,8 @@ internal static class CatalogEndpoints
             q = q?.Trim();
             if (q?.Length > 120)
                 return Error(StatusCodes.Status400BadRequest, "invalid_query", "Запрос q не должен превышать 120 символов.");
+            if (q?.Contains('\0') == true)
+                return Error(StatusCodes.Status400BadRequest, "invalid_query", "Запрос q не должен содержать нулевой символ.");
 
             var products = db.Products.AsNoTracking();
             if (!string.IsNullOrEmpty(q))
@@ -65,7 +69,8 @@ internal static class CatalogEndpoints
             db.Warehouses.Add(warehouse);
             await db.SaveChangesAsync(cancellationToken);
             return Results.Created($"/api/warehouses/{warehouse.Id}", warehouse);
-        });
+        }).Produces<Warehouse>(StatusCodes.Status201Created)
+            .ProducesProblem(StatusCodes.Status400BadRequest);
 
         app.MapGet("/api/warehouses/{id:int}", async (int id, MarketFlowDbContext db, CancellationToken cancellationToken) =>
         {
@@ -86,7 +91,7 @@ internal static class CatalogEndpoints
     internal static IResult Error(int statusCode, string code, string title) =>
         Results.Problem(statusCode: statusCode, title: title, extensions: new Dictionary<string, object?> { ["code"] = code });
 
-    private static bool ValidName(string? name) => name is { Length: > 0 and <= 120 };
+    private static bool ValidName(string? name) => name is { Length: > 0 and <= 120 } && !name.Contains('\0');
 
     internal static bool ValidSku(string? sku) => sku is { Length: > 0 and <= 40 }
         && sku.All(character => character is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '.' or '_' or '-');
