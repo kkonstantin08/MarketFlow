@@ -12,7 +12,15 @@ MarketFlow — система учёта товаров и остатков на
 - Просмотр фактических, зарезервированных и доступных остатков и журнала операций.
 - Swagger UI для всех операций и одна демонстрационная страница для сценария приёмки и резерва.
 
-Планируемый стек — C# и .NET 10, ASP.NET Core Web API, PostgreSQL, EF Core, OpenAPI со Swagger UI, Docker Compose и xUnit. Проверки в GitHub Actions запланированы на Linux. Один API и одна база обслуживают все складские операции. Подробнее в [архитектуре](docs/architecture.md).
+Стек проекта — C# и .NET 10, ASP.NET Core Web API, PostgreSQL, EF Core, OpenAPI со Swagger UI, Docker Compose и xUnit. В репозитории настроен GitHub Actions для сборки и тестов на Linux. Один API и одна база обслуживают складские операции. Подробнее — в [описании архитектуры](docs/architecture.md).
+
+## Где что находится
+
+- API и веб-страница — [`src/MarketFlow.Api`](src/MarketFlow.Api).
+- Интеграционные тесты — [`tests/MarketFlow.Tests`](tests/MarketFlow.Tests).
+- Контракт и критерии приёмки — [спецификация MVP](docs/specs/mvp.md).
+- Устройство складских операций — [предметная модель](docs/domain.md) и [архитектура](docs/architecture.md).
+- Все документы проекта — [указатель документации](docs/README.md).
 
 ## Запуск
 
@@ -44,7 +52,7 @@ docker compose -f compose.test.yaml down
 
 Если SDK установлен через `dotnet-install.sh`, добавьте `~/.dotnet` в `PATH` и задайте `DOTNET_ROOT=~/.dotnet`.
 
-## Примеры планируемого API
+## Примеры API
 
 | Запрос | Назначение |
 | --- | --- |
