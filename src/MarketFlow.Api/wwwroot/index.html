@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f6f8">
+  <title>MarketFlow — движение товара</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <a class="brand" href="/" aria-label="MarketFlow — главная">MarketFlow</a>
+      <a class="api-link" href="/swagger">Документация API <span aria-hidden="true">↗</span></a>
+    </header>
+
+    <div class="intro">
+      <p class="eyebrow">Демонстрация складского сценария</p>
+      <h1>Движение товара</h1>
+      <p>Укажите товар и склад, примите поставку и зарезервируйте часть остатка.</p>
+    </div>
+
+    <section class="identity panel" aria-labelledby="identity-title">
+      <div class="section-heading">
+        <span class="step" aria-hidden="true">01</span>
+        <div>
+          <h2 id="identity-title">Товар и склад</h2>
+          <p>Создайте их заранее в <a href="/swagger">Swagger UI</a> и укажите идентификаторы.</p>
+        </div>
+      </div>
+      <div class="fields identity-fields">
+        <label>Идентификатор товара
+          <input id="product-id" name="productId" type="number" min="1" max="2147483647" step="1" inputmode="numeric" required>
+        </label>
+        <label>Идентификатор склада
+          <input id="warehouse-id" name="warehouseId" type="number" min="1" max="2147483647" step="1" inputmode="numeric" required>
+        </label>
+      </div>
+    </section>
+
+    <div class="workflow">
+      <section class="panel" aria-labelledby="supply-title">
+        <div class="section-heading">
+          <span class="step" aria-hidden="true">02</span>
+          <div><h2 id="supply-title">Приёмка</h2><p>Повтор с тем же номером не начислит товар снова.</p></div>
+        </div>
+        <form id="supply-form" class="fields">
+          <label>Номер поставки
+            <input id="reference" name="reference" maxlength="40" pattern="[A-Za-z0-9._-]+" autocomplete="off" required>
+          </label>
+          <label>Количество
+            <input id="supply-quantity" name="quantity" type="number" min="1" max="2147483647" step="1" value="10" inputmode="numeric" required>
+          </label>
+          <button type="submit">Принять товар</button>
+        </form>
+      </section>
+
+      <section class="panel" aria-labelledby="reservation-title">
+        <div class="section-heading">
+          <span class="step" aria-hidden="true">03</span>
+          <div><h2 id="reservation-title">Резерв</h2><p>Количество резерва вычитается из доступного остатка.</p></div>
+        </div>
+        <form id="reservation-form" class="fields">
+          <label>Количество
+            <input id="reservation-quantity" name="quantity" type="number" min="1" max="2147483647" step="1" value="4" inputmode="numeric" required>
+          </label>
+          <button type="submit">Зарезервировать</button>
+        </form>
+      </section>
+    </div>
+
+    <section class="panel result-panel" aria-labelledby="result-title">
+      <div class="result-heading">
+        <div class="section-heading">
+          <span class="step" aria-hidden="true">04</span>
+          <div><h2 id="result-title">Результат</h2><p id="result-message" role="status" aria-live="polite">Введите идентификаторы, чтобы загрузить остаток.</p></div>
+        </div>
+        <button id="refresh-button" class="secondary-button" type="button">Обновить остаток</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">На складе</th><th scope="col">В резерве</th><th scope="col">Доступно</th></tr></thead>
+          <tbody><tr><td id="on-hand">—</td><td id="reserved">—</td><td id="available">—</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>MarketFlow <span>·</span> данные загружаются из складского API</footer>
+  </main>
+</body>
+</html>
