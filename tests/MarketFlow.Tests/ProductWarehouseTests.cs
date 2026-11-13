@@ -14,6 +14,7 @@ namespace MarketFlow.Tests;
 public sealed class ProductWarehouseTests : IAsyncLifetime
 {
     private readonly string _databaseName = $"marketflow_{Guid.NewGuid():N}";
+    private string _databaseConnectionString = null!;
     private WebApplicationFactory<Program> _factory = null!;
     private HttpClient _client = null!;
 
@@ -127,6 +128,184 @@ public sealed class ProductWarehouseTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.NotFound, (await _client.GetAsync("/api/warehouses/999999")).StatusCode);
     }
 
+    [Fact]
+    public async Task Supply_replay_returns_the_original_result_and_changes_stock_once()
+    {
+        var (productId, warehouseId) = await CreateCatalogPair();
+        var request = new { reference = " in-001 ", productId, warehouseId, quantity = 10 };
+
+        var created = await _client.PostAsJsonAsync("/api/supplies", request);
+        var replay = await _client.PostAsJsonAsync("/api/supplies", request);
+        var supply = await created.Content.ReadFromJsonAsync<SupplyResponse>();
+        var replayedSupply = await replay.Content.ReadFromJsonAsync<SupplyResponse>();
+        var stocks = await _client.GetFromJsonAsync<StockResponse[]>("/api/stocks");
+        var movements = await _client.GetFromJsonAsync<MovementResponse[]>("/api/stock-movements");
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.NotNull(supply);
+        Assert.Equal("IN-001", supply.Reference);
+        Assert.Equal(supply, replayedSupply);
+        Assert.NotNull(stocks);
+        Assert.Equal(new StockResponse(productId, warehouseId, 10, 0, 10), Assert.Single(stocks));
+        Assert.NotNull(movements);
+        Assert.Equal(new MovementResponse(1, productId, warehouseId, "supply", supply.Id, 10, 0, supply.CreatedAt), Assert.Single(movements));
+    }
+
+    [Fact]
+    public async Task Supply_conflicts_are_checked_before_references_and_new_unknown_references_return_404()
+    {
+        var (productId, warehouseId) = await CreateCatalogPair();
+        Assert.Equal(HttpStatusCode.Created, (await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-001", productId, warehouseId, quantity = 10 })).StatusCode);
+
+        var conflict = await _client.PostAsJsonAsync("/api/supplies", new { reference = "in-001", productId = 999999, warehouseId = 999999, quantity = 9 });
+        var unknownProduct = await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-002", productId = 999999, warehouseId, quantity = 1 });
+        var invalidReference = await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN 003", productId = 999999, warehouseId, quantity = 1 });
+        var invalidQuantity = await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-004", productId, warehouseId, quantity = 0 });
+
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        Assert.Equal("supply_reference_conflict", await ReadCode(conflict));
+        Assert.Equal(HttpStatusCode.NotFound, unknownProduct.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, invalidReference.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, invalidQuantity.StatusCode);
+    }
+
+    [Fact]
+    public async Task Concurrent_supplies_with_different_references_add_without_lost_updates()
+    {
+        var (productId, warehouseId) = await CreateCatalogPair();
+
+        var first = _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-001", productId, warehouseId, quantity = 10 });
+        var second = _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-002", productId, warehouseId, quantity = 6 });
+        var responses = await Task.WhenAll(first, second);
+        var stocks = await _client.GetFromJsonAsync<StockResponse[]>("/api/stocks");
+        var movements = await _client.GetFromJsonAsync<MovementResponse[]>("/api/stock-movements");
+
+        Assert.All(responses, response => Assert.Equal(HttpStatusCode.Created, response.StatusCode));
+        Assert.NotNull(stocks);
+        Assert.Equal(new StockResponse(productId, warehouseId, 16, 0, 16), Assert.Single(stocks));
+        Assert.NotNull(movements);
+        Assert.Equal(2, movements.Length);
+        Assert.Equal(16, movements.Sum(movement => movement.OnHandDelta));
+    }
+
+    [Fact]
+    public async Task Concurrent_replays_of_one_reference_create_one_supply_and_one_movement()
+    {
+        var (productId, warehouseId) = await CreateCatalogPair();
+        var request = new { reference = "IN-001", productId, warehouseId, quantity = 10 };
+
+        var responses = await Task.WhenAll(
+            _client.PostAsJsonAsync("/api/supplies", request),
+            _client.PostAsJsonAsync("/api/supplies", request));
+        var results = await Task.WhenAll(responses.Select(response => response.Content.ReadFromJsonAsync<SupplyResponse>()));
+        var stocks = await _client.GetFromJsonAsync<StockResponse[]>("/api/stocks");
+        var movements = await _client.GetFromJsonAsync<MovementResponse[]>("/api/stock-movements");
+
+        Assert.Equal([HttpStatusCode.OK, HttpStatusCode.Created], responses.Select(response => response.StatusCode).OrderBy(status => status));
+        Assert.Equal(results[0]!.Id, results[1]!.Id);
+        Assert.NotNull(stocks);
+        Assert.Equal(10, Assert.Single(stocks).OnHand);
+        Assert.NotNull(movements);
+        Assert.Single(movements);
+    }
+
+    [Fact]
+    public async Task Stock_limit_rejects_supply_without_persisting_its_fact_or_movement()
+    {
+        var (productId, warehouseId) = await CreateCatalogPair();
+        Assert.Equal(HttpStatusCode.Created, (await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-001", productId, warehouseId, quantity = int.MaxValue })).StatusCode);
+
+        var overflow = await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-002", productId, warehouseId, quantity = 1 });
+        var stocks = await _client.GetFromJsonAsync<StockResponse[]>("/api/stocks");
+        var movements = await _client.GetFromJsonAsync<MovementResponse[]>("/api/stock-movements");
+
+        Assert.Equal(HttpStatusCode.Conflict, overflow.StatusCode);
+        Assert.Equal("stock_limit", await ReadCode(overflow));
+        Assert.Equal(1, await CountSupplies());
+        Assert.NotNull(stocks);
+        Assert.Equal(int.MaxValue, Assert.Single(stocks).OnHand);
+        Assert.NotNull(movements);
+        Assert.Single(movements);
+    }
+
+    [Fact]
+    public async Task Concurrent_conflicting_replays_keep_only_the_winning_supply()
+    {
+        var (productId, warehouseId) = await CreateCatalogPair();
+        var first = _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-001", productId, warehouseId, quantity = 10 });
+        var second = _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-001", productId, warehouseId, quantity = 6 });
+        var responses = await Task.WhenAll(first, second);
+        var winner = Array.FindIndex(responses, response => response.StatusCode == HttpStatusCode.Created);
+        Assert.NotEqual(-1, winner);
+        var loser = 1 - winner;
+        var stocks = await _client.GetFromJsonAsync<StockResponse[]>("/api/stocks");
+        var movements = await _client.GetFromJsonAsync<MovementResponse[]>("/api/stock-movements");
+
+        Assert.Equal(HttpStatusCode.Conflict, responses[loser].StatusCode);
+        Assert.Equal("supply_reference_conflict", await ReadCode(responses[loser]));
+        Assert.NotNull(stocks);
+        Assert.Equal(new StockResponse(productId, warehouseId, winner == 0 ? 10 : 6, 0, winner == 0 ? 10 : 6), Assert.Single(stocks));
+        Assert.NotNull(movements);
+        Assert.Single(movements);
+    }
+
+    [Fact]
+    public async Task Failed_movement_insert_rolls_back_supply_and_stock_then_allows_retry()
+    {
+        var (productId, warehouseId) = await CreateCatalogPair();
+        await ExecuteSql("""
+            CREATE FUNCTION reject_supply_movement() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN RAISE EXCEPTION 'test movement failure'; END $$;
+            CREATE TRIGGER reject_supply_movement BEFORE INSERT ON "StockMovements"
+            FOR EACH ROW EXECUTE FUNCTION reject_supply_movement();
+            """);
+
+        var failed = await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-ROLLBACK", productId, warehouseId, quantity = 10 });
+        var error = await failed.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+        Assert.StartsWith("application/problem+json", failed.Content.Headers.ContentType?.ToString());
+        Assert.DoesNotContain("test movement failure", error);
+        Assert.Equal(0, await CountSupplies());
+        Assert.Equal(0, await CountRows("Stocks"));
+        Assert.Equal(0, await CountRows("StockMovements"));
+
+        await ExecuteSql("DROP TRIGGER reject_supply_movement ON \"StockMovements\"; DROP FUNCTION reject_supply_movement();");
+        var retry = await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-ROLLBACK", productId, warehouseId, quantity = 10 });
+
+        Assert.Equal(HttpStatusCode.Created, retry.StatusCode);
+        Assert.Equal(1, await CountSupplies());
+    }
+
+    [Fact]
+    public async Task Stock_and_movement_filters_and_pagination_apply_after_sorting()
+    {
+        var (productId, warehouseId) = await CreateCatalogPair();
+        await CreateProduct("Nut", "NUT-01");
+        var products = await _client.GetFromJsonAsync<ProductResponse[]>("/api/products");
+        Assert.NotNull(products);
+        var secondProductId = products.Single(product => product.Sku == "NUT-01").Id;
+        await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-001", productId, warehouseId, quantity = 5 });
+        await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-002", productId, warehouseId, quantity = 7 });
+        await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-003", productId = secondProductId, warehouseId, quantity = 3 });
+
+        var stocks = await _client.GetFromJsonAsync<StockResponse[]>($"/api/stocks?productId={productId}&warehouseId={warehouseId}");
+        var noStocks = await _client.GetFromJsonAsync<StockResponse[]>($"/api/stocks?productId=999999&warehouseId={warehouseId}");
+        var movements = await _client.GetFromJsonAsync<MovementResponse[]>($"/api/stock-movements?productId={productId}&warehouseId={warehouseId}");
+        var movementPage = await _client.GetFromJsonAsync<MovementResponse[]>($"/api/stock-movements?productId={productId}&limit=1&offset=1");
+
+        Assert.NotNull(stocks);
+        Assert.Equal(new StockResponse(productId, warehouseId, 12, 0, 12), Assert.Single(stocks));
+        Assert.Empty(noStocks!);
+        Assert.NotNull(movements);
+        Assert.Equal(2, movements.Length);
+        Assert.True(movements[0].Id > movements[1].Id);
+        Assert.NotNull(movementPage);
+        Assert.Equal(movements[1], Assert.Single(movementPage));
+        Assert.Equal(HttpStatusCode.BadRequest, (await _client.GetAsync("/api/stocks?productId=0")).StatusCode);
+    }
+
     public async Task InitializeAsync()
     {
         var connectionString = Environment.GetEnvironmentVariable("MARKETFLOW_TEST_DB")
@@ -139,8 +318,8 @@ public sealed class ProductWarehouseTests : IAsyncLifetime
             await command.ExecuteNonQueryAsync();
         }
 
-        var databaseConnectionString = new NpgsqlConnectionStringBuilder(connectionString) { Database = _databaseName }.ConnectionString;
-        _factory = new ApiFactory(databaseConnectionString);
+        _databaseConnectionString = new NpgsqlConnectionStringBuilder(connectionString) { Database = _databaseName }.ConnectionString;
+        _factory = new ApiFactory(_databaseConnectionString);
         _client = _factory.CreateClient();
         using var scope = _factory.Services.CreateScope();
         Assert.Equal(_databaseName, scope.ServiceProvider.GetRequiredService<MarketFlowDbContext>().Database.GetDbConnection().Database);
@@ -165,6 +344,41 @@ public sealed class ProductWarehouseTests : IAsyncLifetime
         Assert.True(response.StatusCode == HttpStatusCode.Created, await response.Content.ReadAsStringAsync());
     }
 
+    private async Task<(int ProductId, int WarehouseId)> CreateCatalogPair()
+    {
+        await CreateProduct("Bolt", "BOLT-01");
+        var product = await _client.GetFromJsonAsync<ProductResponse[]>("/api/products");
+        var warehouseResponse = await _client.PostAsJsonAsync("/api/warehouses", new { name = "Central" });
+        var warehouse = await warehouseResponse.Content.ReadFromJsonAsync<WarehouseResponse>();
+        Assert.NotNull(product);
+        Assert.NotNull(warehouse);
+        return (Assert.Single(product).Id, warehouse.Id);
+    }
+
+    private async Task<int> CountSupplies()
+    {
+        await using var connection = new NpgsqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand("SELECT COUNT(*) FROM \"Supplies\"", connection);
+        return (int)(long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private async Task<int> CountRows(string table)
+    {
+        await using var connection = new NpgsqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand($"SELECT COUNT(*) FROM \"{table}\"", connection);
+        return (int)(long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private async Task ExecuteSql(string sql)
+    {
+        await using var connection = new NpgsqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync();
+    }
+
     private static async Task<string?> ReadCode(HttpResponseMessage response)
     {
         using var body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
@@ -173,6 +387,9 @@ public sealed class ProductWarehouseTests : IAsyncLifetime
 
     private sealed record ProductResponse(int Id, string Name, string Sku);
     private sealed record WarehouseResponse(int Id, string Name);
+    private sealed record SupplyResponse(int Id, string Reference, int ProductId, int WarehouseId, int Quantity, DateTime CreatedAt);
+    private sealed record StockResponse(int ProductId, int WarehouseId, int OnHand, int Reserved, int Available);
+    private sealed record MovementResponse(int Id, int ProductId, int WarehouseId, string Type, int OperationId, int OnHandDelta, int ReservedDelta, DateTime CreatedAt);
 
     private sealed class ApiFactory(string connectionString) : WebApplicationFactory<Program>
     {

@@ -83,15 +83,15 @@ internal static class CatalogEndpoints
         });
     }
 
-    private static IResult Error(int statusCode, string code, string title) =>
+    internal static IResult Error(int statusCode, string code, string title) =>
         Results.Problem(statusCode: statusCode, title: title, extensions: new Dictionary<string, object?> { ["code"] = code });
 
     private static bool ValidName(string? name) => name is { Length: > 0 and <= 120 };
 
-    private static bool ValidSku(string? sku) => sku is { Length: > 0 and <= 40 }
+    internal static bool ValidSku(string? sku) => sku is { Length: > 0 and <= 40 }
         && sku.All(character => character is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '.' or '_' or '-');
 
-    private static bool ValidPage(int? limit, int? offset) => limit is null or >= 1 and <= 100 && offset is null or >= 0;
+    internal static bool ValidPage(int? limit, int? offset) => limit is null or >= 1 and <= 100 && offset is null or >= 0;
 
     private static string EscapeLike(string value) => value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 

@@ -10,6 +10,7 @@ builder.Services.AddProblemDetails();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
+app.UseExceptionHandler();
 app.UseStatusCodePages();
 if (app.Environment.IsDevelopment())
 {
@@ -18,6 +19,7 @@ if (app.Environment.IsDevelopment())
 }
 app.MapGet("/health", () => Results.Text("ok"));
 app.MapCatalogEndpoints();
+app.MapInventoryEndpoints();
 
 await using (var scope = app.Services.CreateAsyncScope())
     await scope.ServiceProvider.GetRequiredService<MarketFlowDbContext>().Database.MigrateAsync();
