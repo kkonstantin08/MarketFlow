@@ -7,6 +7,7 @@ public sealed class MarketFlowDbContext(DbContextOptions<MarketFlowDbContext> op
     public DbSet<Product> Products => Set<Product>();
     public DbSet<Warehouse> Warehouses => Set<Warehouse>();
     public DbSet<Supply> Supplies => Set<Supply>();
+    public DbSet<Reservation> Reservations => Set<Reservation>();
     public DbSet<Stock> Stocks => Set<Stock>();
     public DbSet<StockMovement> StockMovements => Set<StockMovement>();
 
@@ -31,6 +32,14 @@ public sealed class MarketFlowDbContext(DbContextOptions<MarketFlowDbContext> op
             entity.HasOne<Warehouse>().WithMany().HasForeignKey(supply => supply.WarehouseId).OnDelete(DeleteBehavior.Restrict);
         });
 
+        modelBuilder.Entity<Reservation>(entity =>
+        {
+            entity.Property(reservation => reservation.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+            entity.ToTable(table => table.HasCheckConstraint("ck_reservations_quantity_positive", "\"Quantity\" > 0"));
+            entity.HasOne<Product>().WithMany().HasForeignKey(reservation => reservation.ProductId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<Warehouse>().WithMany().HasForeignKey(reservation => reservation.WarehouseId).OnDelete(DeleteBehavior.Restrict);
+        });
+
         modelBuilder.Entity<Stock>(entity =>
         {
             entity.HasKey(stock => new { stock.ProductId, stock.WarehouseId });
@@ -44,8 +53,10 @@ public sealed class MarketFlowDbContext(DbContextOptions<MarketFlowDbContext> op
             entity.Property(movement => movement.Type).HasMaxLength(20).IsRequired();
             entity.Property(movement => movement.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
             entity.HasIndex(movement => movement.SupplyId).IsUnique();
-            entity.ToTable(table => table.HasCheckConstraint("ck_stock_movements_supply", "\"Type\" = 'supply' AND \"SupplyId\" > 0 AND \"OnHandDelta\" > 0 AND \"ReservedDelta\" = 0"));
+            entity.HasIndex(movement => movement.ReservationId).IsUnique();
+            entity.ToTable(table => table.HasCheckConstraint("ck_stock_movements_operation", "(\"Type\" = 'supply' AND \"SupplyId\" IS NOT NULL AND \"ReservationId\" IS NULL AND \"OnHandDelta\" > 0 AND \"ReservedDelta\" = 0) OR (\"Type\" = 'reservation' AND \"SupplyId\" IS NULL AND \"ReservationId\" IS NOT NULL AND \"OnHandDelta\" = 0 AND \"ReservedDelta\" > 0)"));
             entity.HasOne<Supply>().WithMany().HasForeignKey(movement => movement.SupplyId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<Reservation>().WithMany().HasForeignKey(movement => movement.ReservationId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<Product>().WithMany().HasForeignKey(movement => movement.ProductId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<Warehouse>().WithMany().HasForeignKey(movement => movement.WarehouseId).OnDelete(DeleteBehavior.Restrict);
         });

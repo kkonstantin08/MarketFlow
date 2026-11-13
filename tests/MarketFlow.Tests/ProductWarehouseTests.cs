@@ -306,6 +306,149 @@ public sealed class ProductWarehouseTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.BadRequest, (await _client.GetAsync("/api/stocks?productId=0")).StatusCode);
     }
 
+    [Fact]
+    public async Task Reservations_reduce_available_stock_and_allow_reserving_the_exact_remainder()
+    {
+        var (productId, warehouseId) = await CreateCatalogPair();
+        await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-001", productId, warehouseId, quantity = 10 });
+
+        var partial = await _client.PostAsJsonAsync("/api/reservations", new { productId, warehouseId, quantity = 4 });
+        var exact = await _client.PostAsJsonAsync("/api/reservations", new { productId, warehouseId, quantity = 6 });
+        var tooMuch = await _client.PostAsJsonAsync("/api/reservations", new { productId, warehouseId, quantity = 1 });
+        var firstReservation = await partial.Content.ReadFromJsonAsync<ReservationResponse>();
+        var stock = await _client.GetFromJsonAsync<StockResponse[]>($"/api/stocks?productId={productId}&warehouseId={warehouseId}");
+        var movements = await _client.GetFromJsonAsync<MovementResponse[]>($"/api/stock-movements?productId={productId}&warehouseId={warehouseId}");
+
+        Assert.Equal(HttpStatusCode.Created, partial.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, exact.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, tooMuch.StatusCode);
+        Assert.Equal("insufficient_stock", await ReadCode(tooMuch));
+        Assert.NotNull(firstReservation);
+        Assert.NotNull(stock);
+        Assert.Equal(new StockResponse(productId, warehouseId, 10, 10, 0), Assert.Single(stock));
+        Assert.NotNull(movements);
+        Assert.Equal(3, movements.Length);
+        Assert.Contains(movements, movement => movement.Type == "reservation" && movement.OperationId == firstReservation.Id && movement.OnHandDelta == 0 && movement.ReservedDelta == 4);
+        Assert.Equal(2, await CountRows("Reservations"));
+    }
+
+    [Fact]
+    public async Task Reservation_requires_existing_references_and_stock_and_valid_quantity()
+    {
+        var (productId, warehouseId) = await CreateCatalogPair();
+        var missingStock = await _client.PostAsJsonAsync("/api/reservations", new { productId, warehouseId, quantity = 1 });
+        var unknownProduct = await _client.PostAsJsonAsync("/api/reservations", new { productId = 999999, warehouseId, quantity = 1 });
+        var unknownWarehouse = await _client.PostAsJsonAsync("/api/reservations", new { productId, warehouseId = 999999, quantity = 1 });
+        var invalidQuantity = await _client.PostAsJsonAsync("/api/reservations", new { productId, warehouseId, quantity = -1 });
+        var stocks = await _client.GetFromJsonAsync<StockResponse[]>("/api/stocks");
+        var movements = await _client.GetFromJsonAsync<MovementResponse[]>("/api/stock-movements");
+
+        Assert.Equal(HttpStatusCode.Conflict, missingStock.StatusCode);
+        Assert.Equal("insufficient_stock", await ReadCode(missingStock));
+        Assert.Equal(HttpStatusCode.NotFound, unknownProduct.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, unknownWarehouse.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, invalidQuantity.StatusCode);
+        Assert.Empty(stocks!);
+        Assert.Empty(movements!);
+        Assert.Equal(0, await CountRows("Reservations"));
+        Assert.Equal(0, await CountRows("StockMovements"));
+    }
+
+    [Fact]
+    public async Task Reservations_are_isolated_by_warehouse()
+    {
+        var (productId, firstWarehouseId) = await CreateCatalogPair();
+        var secondWarehouseResponse = await _client.PostAsJsonAsync("/api/warehouses", new { name = "Second" });
+        var secondWarehouse = await secondWarehouseResponse.Content.ReadFromJsonAsync<WarehouseResponse>();
+        Assert.NotNull(secondWarehouse);
+        await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-001", productId, warehouseId = firstWarehouseId, quantity = 10 });
+        await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-002", productId, warehouseId = secondWarehouse.Id, quantity = 5 });
+
+        var reserved = await _client.PostAsJsonAsync("/api/reservations", new { productId, warehouseId = firstWarehouseId, quantity = 4 });
+        var firstStock = await _client.GetFromJsonAsync<StockResponse[]>($"/api/stocks?productId={productId}&warehouseId={firstWarehouseId}");
+        var secondStock = await _client.GetFromJsonAsync<StockResponse[]>($"/api/stocks?productId={productId}&warehouseId={secondWarehouse.Id}");
+
+        Assert.Equal(HttpStatusCode.Created, reserved.StatusCode);
+        Assert.NotNull(firstStock);
+        Assert.Equal(new StockResponse(productId, firstWarehouseId, 10, 4, 6), Assert.Single(firstStock));
+        Assert.NotNull(secondStock);
+        Assert.Equal(new StockResponse(productId, secondWarehouse.Id, 5, 0, 5), Assert.Single(secondStock));
+    }
+
+    [Fact]
+    public async Task Concurrent_reservations_cannot_reserve_the_same_available_units_twice()
+    {
+        var (productId, warehouseId) = await CreateCatalogPair();
+        await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-001", productId, warehouseId, quantity = 10 });
+
+        var responses = await Task.WhenAll(
+            _client.PostAsJsonAsync("/api/reservations", new { productId, warehouseId, quantity = 7 }),
+            _client.PostAsJsonAsync("/api/reservations", new { productId, warehouseId, quantity = 7 }));
+        var rejected = Assert.Single(responses, response => response.StatusCode == HttpStatusCode.Conflict);
+        var stocks = await _client.GetFromJsonAsync<StockResponse[]>($"/api/stocks?productId={productId}&warehouseId={warehouseId}");
+        var movements = await _client.GetFromJsonAsync<MovementResponse[]>($"/api/stock-movements?productId={productId}&warehouseId={warehouseId}");
+
+        Assert.Single(responses, response => response.StatusCode == HttpStatusCode.Created);
+        Assert.Equal("insufficient_stock", await ReadCode(rejected));
+        Assert.NotNull(stocks);
+        Assert.Equal(new StockResponse(productId, warehouseId, 10, 7, 3), Assert.Single(stocks));
+        Assert.NotNull(movements);
+        Assert.Equal(2, movements.Length);
+        Assert.Single(movements, movement => movement.Type == "reservation");
+    }
+
+    [Fact]
+    public async Task Concurrent_supply_and_reservation_preserve_stock_and_history_invariants()
+    {
+        var (productId, warehouseId) = await CreateCatalogPair();
+        await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-001", productId, warehouseId, quantity = 5 });
+
+        var supply = _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-002", productId, warehouseId, quantity = 3 });
+        var reservation = _client.PostAsJsonAsync("/api/reservations", new { productId, warehouseId, quantity = 7 });
+        var responses = await Task.WhenAll(supply, reservation);
+        var stocks = await _client.GetFromJsonAsync<StockResponse[]>($"/api/stocks?productId={productId}&warehouseId={warehouseId}");
+        var movements = await _client.GetFromJsonAsync<MovementResponse[]>($"/api/stock-movements?productId={productId}&warehouseId={warehouseId}");
+
+        Assert.Equal(HttpStatusCode.Created, responses[0].StatusCode);
+        Assert.Contains(responses[1].StatusCode, new[] { HttpStatusCode.Created, HttpStatusCode.Conflict });
+        Assert.NotNull(stocks);
+        var stock = Assert.Single(stocks);
+        Assert.Equal(8, stock.OnHand);
+        Assert.Equal(responses[1].StatusCode == HttpStatusCode.Created ? 7 : 0, stock.Reserved);
+        Assert.InRange(stock.Available, 1, 8);
+        Assert.NotNull(movements);
+        Assert.Equal(responses[1].StatusCode == HttpStatusCode.Created ? 3 : 2, movements.Length);
+    }
+
+    [Fact]
+    public async Task Failed_reservation_movement_insert_rolls_back_reserved_stock_and_reservation()
+    {
+        var (productId, warehouseId) = await CreateCatalogPair();
+        await _client.PostAsJsonAsync("/api/supplies", new { reference = "IN-001", productId, warehouseId, quantity = 10 });
+        await ExecuteSql("""
+            CREATE FUNCTION reject_reservation_movement() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF NEW."Type" = 'reservation' THEN RAISE EXCEPTION 'test reservation failure'; END IF;
+                RETURN NEW;
+            END $$;
+            CREATE TRIGGER reject_reservation_movement BEFORE INSERT ON "StockMovements"
+            FOR EACH ROW EXECUTE FUNCTION reject_reservation_movement();
+            """);
+
+        var failed = await _client.PostAsJsonAsync("/api/reservations", new { productId, warehouseId, quantity = 4 });
+
+        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+        Assert.Equal(0, await CountRows("Reservations"));
+        Assert.Equal(1, await CountRows("StockMovements"));
+        var stock = await _client.GetFromJsonAsync<StockResponse[]>($"/api/stocks?productId={productId}&warehouseId={warehouseId}");
+        Assert.NotNull(stock);
+        Assert.Equal(new StockResponse(productId, warehouseId, 10, 0, 10), Assert.Single(stock));
+
+        await ExecuteSql("DROP TRIGGER reject_reservation_movement ON \"StockMovements\"; DROP FUNCTION reject_reservation_movement();");
+        var retry = await _client.PostAsJsonAsync("/api/reservations", new { productId, warehouseId, quantity = 4 });
+        Assert.Equal(HttpStatusCode.Created, retry.StatusCode);
+    }
+
     public async Task InitializeAsync()
     {
         var connectionString = Environment.GetEnvironmentVariable("MARKETFLOW_TEST_DB")
@@ -388,6 +531,7 @@ public sealed class ProductWarehouseTests : IAsyncLifetime
     private sealed record ProductResponse(int Id, string Name, string Sku);
     private sealed record WarehouseResponse(int Id, string Name);
     private sealed record SupplyResponse(int Id, string Reference, int ProductId, int WarehouseId, int Quantity, DateTime CreatedAt);
+    private sealed record ReservationResponse(int Id, int ProductId, int WarehouseId, int Quantity, DateTime CreatedAt);
     private sealed record StockResponse(int ProductId, int WarehouseId, int OnHand, int Reserved, int Available);
     private sealed record MovementResponse(int Id, int ProductId, int WarehouseId, string Type, int OperationId, int OnHandDelta, int ReservedDelta, DateTime CreatedAt);
 

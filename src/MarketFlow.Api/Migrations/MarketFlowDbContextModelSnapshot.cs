@@ -49,6 +49,40 @@ namespace MarketFlow.Api.Migrations
                     b.ToTable("Products");
                 });
 
+            modelBuilder.Entity("MarketFlow.Api.Reservation", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+                    b.Property<int>("ProductId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("WarehouseId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProductId");
+
+                    b.HasIndex("WarehouseId");
+
+                    b.ToTable("Reservations", t =>
+                        {
+                            t.HasCheckConstraint("ck_reservations_quantity_positive", "\"Quantity\" > 0");
+                        });
+                });
+
             modelBuilder.Entity("MarketFlow.Api.Stock", b =>
                 {
                     b.Property<int>("ProductId")
@@ -92,10 +126,13 @@ namespace MarketFlow.Api.Migrations
                     b.Property<int>("ProductId")
                         .HasColumnType("integer");
 
+                    b.Property<int?>("ReservationId")
+                        .HasColumnType("integer");
+
                     b.Property<int>("ReservedDelta")
                         .HasColumnType("integer");
 
-                    b.Property<int>("SupplyId")
+                    b.Property<int?>("SupplyId")
                         .HasColumnType("integer");
 
                     b.Property<string>("Type")
@@ -110,6 +147,9 @@ namespace MarketFlow.Api.Migrations
 
                     b.HasIndex("ProductId");
 
+                    b.HasIndex("ReservationId")
+                        .IsUnique();
+
                     b.HasIndex("SupplyId")
                         .IsUnique();
 
@@ -117,7 +157,7 @@ namespace MarketFlow.Api.Migrations
 
                     b.ToTable("StockMovements", t =>
                         {
-                            t.HasCheckConstraint("ck_stock_movements_supply", "\"Type\" = 'supply' AND \"SupplyId\" > 0 AND \"OnHandDelta\" > 0 AND \"ReservedDelta\" = 0");
+                            t.HasCheckConstraint("ck_stock_movements_operation", "(\"Type\" = 'supply' AND \"SupplyId\" IS NOT NULL AND \"ReservationId\" IS NULL AND \"OnHandDelta\" > 0 AND \"ReservedDelta\" = 0) OR (\"Type\" = 'reservation' AND \"SupplyId\" IS NULL AND \"ReservationId\" IS NOT NULL AND \"OnHandDelta\" = 0 AND \"ReservedDelta\" > 0)");
                         });
                 });
 
@@ -182,6 +222,21 @@ namespace MarketFlow.Api.Migrations
                     b.ToTable("Warehouses");
                 });
 
+            modelBuilder.Entity("MarketFlow.Api.Reservation", b =>
+                {
+                    b.HasOne("MarketFlow.Api.Product", null)
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("MarketFlow.Api.Warehouse", null)
+                        .WithMany()
+                        .HasForeignKey("WarehouseId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("MarketFlow.Api.Stock", b =>
                 {
                     b.HasOne("MarketFlow.Api.Product", null)
@@ -205,11 +260,15 @@ namespace MarketFlow.Api.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("MarketFlow.Api.Reservation", null)
+                        .WithMany()
+                        .HasForeignKey("ReservationId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("MarketFlow.Api.Supply", null)
                         .WithMany()
                         .HasForeignKey("SupplyId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("MarketFlow.Api.Warehouse", null)
                         .WithMany()

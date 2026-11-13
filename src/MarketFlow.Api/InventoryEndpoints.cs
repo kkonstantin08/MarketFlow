@@ -65,6 +65,49 @@ internal static class InventoryEndpoints
             return Results.Created($"/api/supplies/{supply.Id}", supply);
         });
 
+        app.MapPost("/api/reservations", async (CreateReservationRequest? request, MarketFlowDbContext db, CancellationToken cancellationToken) =>
+        {
+            if (request is null || request.ProductId <= 0 || request.WarehouseId <= 0 || request.Quantity <= 0)
+                return CatalogEndpoints.Error(StatusCodes.Status400BadRequest, "invalid_request", "Проверьте ссылки и количество резерва.");
+
+            if (!await db.Products.AnyAsync(product => product.Id == request.ProductId, cancellationToken)
+                || !await db.Warehouses.AnyAsync(warehouse => warehouse.Id == request.WarehouseId, cancellationToken))
+                return Results.NotFound();
+
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+            var stockChanged = await ExecuteScalarAsync(db, """
+                UPDATE "Stocks"
+                SET "Reserved" = "Reserved" + @p0
+                WHERE "ProductId" = @p1 AND "WarehouseId" = @p2 AND "OnHand" - "Reserved" >= @p0
+                RETURNING 1 AS "Value"
+                """, cancellationToken, request.Quantity, request.ProductId, request.WarehouseId);
+
+            if (stockChanged == 0)
+                return CatalogEndpoints.Error(StatusCodes.Status409Conflict, "insufficient_stock", "Недостаточно доступного остатка.");
+
+            var reservation = new Reservation
+            {
+                ProductId = request.ProductId,
+                WarehouseId = request.WarehouseId,
+                Quantity = request.Quantity
+            };
+            db.Reservations.Add(reservation);
+            await db.SaveChangesAsync(cancellationToken);
+
+            db.StockMovements.Add(new StockMovement
+            {
+                ProductId = request.ProductId,
+                WarehouseId = request.WarehouseId,
+                ReservationId = reservation.Id,
+                Type = "reservation",
+                OnHandDelta = 0,
+                ReservedDelta = request.Quantity
+            });
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return Results.Created($"/api/reservations/{reservation.Id}", reservation);
+        });
+
         app.MapGet("/api/stocks", async (MarketFlowDbContext db, int? productId = null, int? warehouseId = null, int? limit = null, int? offset = null, CancellationToken cancellationToken = default) =>
         {
             if (!CatalogEndpoints.ValidPage(limit, offset) || productId is <= 0 || warehouseId is <= 0)
@@ -96,7 +139,7 @@ internal static class InventoryEndpoints
             return Results.Ok(await movements.OrderByDescending(movement => movement.CreatedAt).ThenByDescending(movement => movement.Id)
                 .Skip(offset ?? 0).Take(limit ?? 50)
                 .Select(movement => new StockMovementResponse(movement.Id, movement.ProductId, movement.WarehouseId,
-                    movement.Type, movement.SupplyId, movement.OnHandDelta, movement.ReservedDelta, movement.CreatedAt))
+                    movement.Type, movement.SupplyId ?? movement.ReservationId!.Value, movement.OnHandDelta, movement.ReservedDelta, movement.CreatedAt))
                 .ToArrayAsync(cancellationToken));
         });
     }
@@ -119,5 +162,6 @@ internal static class InventoryEndpoints
 }
 
 public sealed record CreateSupplyRequest(string? Reference, int ProductId, int WarehouseId, int Quantity);
+public sealed record CreateReservationRequest(int ProductId, int WarehouseId, int Quantity);
 public sealed record StockResponse(int ProductId, int WarehouseId, int OnHand, int Reserved, int Available);
 public sealed record StockMovementResponse(int Id, int ProductId, int WarehouseId, string Type, int OperationId, int OnHandDelta, int ReservedDelta, DateTime CreatedAt);
