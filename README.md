@@ -18,10 +18,15 @@ MarketFlow — система учёта товаров и остатков на
 
 Нужны .NET 10 SDK и Docker Compose. Если SDK установлен через `dotnet-install.sh`, добавьте `~/.dotnet` в `PATH` и задайте `DOTNET_ROOT=~/.dotnet`.
 
-Запустите тестовую PostgreSQL и проверки:
+Запустите локальную PostgreSQL. API применяет миграции при старте:
 
 ```sh
 docker compose -f compose.test.yaml up -d --wait
+```
+
+Проверьте решение:
+
+```sh
 dotnet test MarketFlow.sln
 ```
 
