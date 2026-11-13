@@ -14,31 +14,26 @@ MarketFlow — система учёта товаров и остатков на
 
 Планируемый стек — C# и .NET 10, ASP.NET Core Web API, PostgreSQL, EF Core, OpenAPI со Swagger UI, Docker Compose и xUnit. Проверки в GitHub Actions запланированы на Linux. Один API и одна база обслуживают все складские операции. Подробнее в [архитектуре](docs/architecture.md).
 
-## Разработка и проверки
+## Запуск
 
-Нужны .NET 10 SDK и Docker Compose. Если SDK установлен через `dotnet-install.sh`, добавьте `~/.dotnet` в `PATH` и задайте `DOTNET_ROOT=~/.dotnet`.
+Нужен Docker Compose. `.env.example` содержит демонстрационные данные для локального запуска:
 
-Запустите локальную PostgreSQL. API применяет миграции при старте:
+```sh
+cp .env.example .env
+docker compose up --build -d
+```
+
+Swagger UI доступен на `http://localhost:8080/swagger`. API применяет миграции при старте. `docker compose down` останавливает контейнеры и сохраняет данные в именованном томе.
+
+Для локальных проверок нужны также .NET 10 SDK и отдельный тестовый PostgreSQL:
 
 ```sh
 docker compose -f compose.test.yaml up -d --wait
-```
-
-Проверьте решение:
-
-```sh
 dotnet test MarketFlow.sln
+docker compose -f compose.test.yaml down
 ```
 
-Чтобы открыть текущую основу API локально:
-
-```sh
-dotnet run --project src/MarketFlow.Api --urls http://localhost:8080
-```
-
-Swagger UI доступен на `http://localhost:8080/swagger`. Для остановки тестовой БД выполните `docker compose -f compose.test.yaml down`.
-
-Полный Compose-запуск API и БД появится на этапе 5.
+Если SDK установлен через `dotnet-install.sh`, добавьте `~/.dotnet` в `PATH` и задайте `DOTNET_ROOT=~/.dotnet`.
 
 ## Примеры планируемого API
 
