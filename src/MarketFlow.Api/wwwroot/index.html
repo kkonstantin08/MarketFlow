@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#075bff">
   <title>MarketFlow — движение товара</title>
-  <link rel="stylesheet" href="/styles.css?v=ozon-2">
-  <script src="/app.js?v=ozon-1" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=ozon-3">
+  <script src="/app.js?v=ozon-2" defer></script>
 </head>
 <body>
   <main class="page">
@@ -21,20 +21,38 @@
       <p>Укажите товар и склад, примите поставку и зарезервируйте часть остатка.</p>
     </div>
 
-    <section class="identity panel" aria-labelledby="identity-title">
+    <section id="catalog-section" class="panel" aria-labelledby="catalog-title">
       <div class="section-heading">
         <div>
-          <h2 id="identity-title">Товар и склад</h2>
-          <p>Создайте их заранее в <a href="/swagger">Swagger UI</a> и укажите идентификаторы.</p>
+          <h2 id="catalog-title">Товар и склад</h2>
+          <p>Выберите существующие или создайте новые прямо здесь.</p>
         </div>
       </div>
-      <div class="fields identity-fields">
-        <label>Идентификатор товара
-          <input id="product-id" name="productId" type="number" min="1" max="2147483647" step="1" inputmode="numeric" required>
-        </label>
-        <label>Идентификатор склада
-          <input id="warehouse-id" name="warehouseId" type="number" min="1" max="2147483647" step="1" inputmode="numeric" required>
-        </label>
+      <div class="catalog-grid">
+        <div class="catalog-block">
+          <label for="product-id">Товар</label>
+          <select id="product-id" name="productId" required>
+            <option value="" selected disabled>Загрузка товаров…</option>
+          </select>
+          <form id="product-form" class="catalog-create">
+            <label for="product-name">Название</label>
+            <input id="product-name" name="name" maxlength="120" required>
+            <label for="product-sku">SKU</label>
+            <input id="product-sku" name="sku" maxlength="40" pattern="[A-Za-z0-9._\-]+" required>
+            <button type="submit">Создать товар</button>
+          </form>
+        </div>
+        <div class="catalog-block">
+          <label for="warehouse-id">Склад</label>
+          <select id="warehouse-id" name="warehouseId" required>
+            <option value="" selected disabled>Загрузка складов…</option>
+          </select>
+          <form id="warehouse-form" class="catalog-create">
+            <label for="warehouse-name">Название</label>
+            <input id="warehouse-name" name="name" maxlength="120" required>
+            <button type="submit">Создать склад</button>
+          </form>
+        </div>
       </div>
     </section>
 

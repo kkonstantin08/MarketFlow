@@ -63,13 +63,17 @@ public sealed class ApiSmokeTests(WebApplicationFactory<Program> factory) : ICla
 
         Assert.Equal(System.Net.HttpStatusCode.OK, page.StatusCode);
         Assert.Contains("Приёмка", pageContent);
-        Assert.Contains("<label>Идентификатор товара", pageContent);
-        Assert.Contains("<label>Идентификатор склада", pageContent);
+        Assert.Contains("<label for=\"product-id\">Товар</label>", pageContent);
+        Assert.Contains("<label for=\"warehouse-id\">Склад</label>", pageContent);
+        Assert.Contains("id=\"product-form\"", pageContent);
+        Assert.Contains("id=\"warehouse-form\"", pageContent);
         Assert.Equal("text/css", styles.Content.Headers.ContentType?.MediaType);
         Assert.Equal("text/javascript", script.Content.Headers.ContentType?.MediaType);
         Assert.Contains(":focus-visible", styleContent);
         Assert.Contains("@media (max-width: 680px)", styleContent);
         Assert.Contains("/api/supplies", scriptContent);
         Assert.Contains("/api/reservations", scriptContent);
+        Assert.Contains("/api/products", scriptContent);
+        Assert.Contains("/api/warehouses", scriptContent);
     }
 }

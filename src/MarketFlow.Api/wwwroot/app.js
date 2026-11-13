@@ -1,12 +1,13 @@
-const productId = document.querySelector("#product-id");
-const warehouseId = document.querySelector("#warehouse-id");
+const productSelect = document.querySelector("#product-id");
+const warehouseSelect = document.querySelector("#warehouse-id");
 const message = document.querySelector("#result-message");
 const refreshButton = document.querySelector("#refresh-button");
-const operationButtons = [...document.querySelectorAll("form button")];
+const actionButtons = [...document.querySelectorAll("form button")];
 let stockRequest = 0;
 
 function pairIsValid() {
-  return productId.value && warehouseId.value && productId.checkValidity() && warehouseId.checkValidity();
+  return productSelect.value && warehouseSelect.value
+    && productSelect.checkValidity() && warehouseSelect.checkValidity();
 }
 
 function setMessage(text, isError = false) {
@@ -26,15 +27,66 @@ function showStock(stock) {
   document.querySelector("#available").textContent = stock?.available ?? "—";
 }
 
+function setOptions(select, items, label) {
+  select.replaceChildren(new Option(label, "", true, true));
+  for (const item of items)
+    select.add(new Option(item.label, item.id));
+}
+
+async function loadCatalogs() {
+  try {
+    // The API caps a page at 100 items; add pagination if demo catalogs outgrow that size.
+    const [productsResponse, warehousesResponse] = await Promise.all([
+      fetch("/api/products?limit=100"), fetch("/api/warehouses?limit=100")
+    ]);
+    if (!productsResponse.ok) throw new Error(await readError(productsResponse));
+    if (!warehousesResponse.ok) throw new Error(await readError(warehousesResponse));
+
+    const [products, warehouses] = await Promise.all([productsResponse.json(), warehousesResponse.json()]);
+    setOptions(productSelect, products.map(product => ({ id: product.id, label: `${product.name} · ${product.sku}` })), "Выберите товар");
+    setOptions(warehouseSelect, warehouses.map(warehouse => ({ id: warehouse.id, label: `${warehouse.name} · №${warehouse.id}` })), "Выберите склад");
+    setMessage("Выберите товар и склад или создайте их ниже.");
+  } catch (error) {
+    setMessage(error.message || "Не удалось загрузить каталог.", true);
+  }
+}
+
+async function createCatalogItem(form, path, select, label) {
+  if (!form.reportValidity()) return;
+  const button = form.querySelector("button");
+  button.disabled = true;
+  try {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Object.fromEntries(new FormData(form)))
+    });
+    if (!response.ok) throw new Error(await readError(response));
+
+    const item = await response.json();
+    const optionText = path === "/api/products"
+      ? `${item.name} · ${item.sku}`
+      : `${item.name} · №${item.id}`;
+    select.add(new Option(optionText, item.id, true, true));
+    form.reset();
+    setMessage(`${label} создан и выбран.`);
+    if (pairIsValid()) await refreshStock();
+  } catch (error) {
+    setMessage(error.message || `Не удалось создать ${label.toLowerCase()}.`, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function refreshStock(operationMessage, operationFailed = false) {
   const request = ++stockRequest;
   if (!pairIsValid()) {
     showStock();
-    setMessage("Укажите корректные идентификаторы товара и склада.", true);
+    setMessage("Выберите товар и склад.", true);
     return;
   }
 
-  const query = new URLSearchParams({ productId: Number(productId.value), warehouseId: Number(warehouseId.value) });
+  const query = new URLSearchParams({ productId: productSelect.value, warehouseId: warehouseSelect.value });
   try {
     const response = await fetch(`/api/stocks?${query}`);
     if (!response.ok) throw new Error(await readError(response));
@@ -54,12 +106,12 @@ async function refreshStock(operationMessage, operationFailed = false) {
 async function submitOnce(path, body, successText) {
   if (refreshButton.disabled) return;
   if (!pairIsValid()) {
-    setMessage("Сначала укажите корректные идентификаторы товара и склада.", true);
+    setMessage("Сначала выберите товар и склад.", true);
     return;
   }
 
   ++stockRequest;
-  const controls = [productId, warehouseId, refreshButton, ...operationButtons];
+  const controls = [productSelect, warehouseSelect, refreshButton, ...actionButtons];
   controls.forEach(control => control.disabled = true);
   try {
     let operationMessage = successText;
@@ -68,7 +120,7 @@ async function submitOnce(path, body, successText) {
       const response = await fetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productId: Number(productId.value), warehouseId: Number(warehouseId.value), ...body })
+        body: JSON.stringify({ productId: Number(productSelect.value), warehouseId: Number(warehouseSelect.value), ...body })
       });
       if (!response.ok) {
         operationFailed = true;
@@ -84,6 +136,16 @@ async function submitOnce(path, body, successText) {
     controls.forEach(control => control.disabled = false);
   }
 }
+
+document.querySelector("#product-form").addEventListener("submit", event => {
+  event.preventDefault();
+  createCatalogItem(event.currentTarget, "/api/products", productSelect, "Товар");
+});
+
+document.querySelector("#warehouse-form").addEventListener("submit", event => {
+  event.preventDefault();
+  createCatalogItem(event.currentTarget, "/api/warehouses", warehouseSelect, "Склад");
+});
 
 document.querySelector("#supply-form").addEventListener("submit", event => {
   event.preventDefault();
@@ -102,13 +164,13 @@ document.querySelector("#reservation-form").addEventListener("submit", event => 
 
 refreshButton.addEventListener("click", () => refreshStock());
 
-[productId, warehouseId].forEach(input => {
-  input.addEventListener("input", () => {
+for (const select of [productSelect, warehouseSelect]) {
+  select.addEventListener("change", () => {
     ++stockRequest;
     showStock();
-    setMessage("Выберите товар и склад для просмотра остатка.");
+    if (pairIsValid()) refreshStock();
+    else setMessage("Выберите товар и склад.");
   });
-  input.addEventListener("change", () => {
-    if (pairIsValid() && !refreshButton.disabled) refreshStock();
-  });
-});
+}
+
+loadCatalogs();
