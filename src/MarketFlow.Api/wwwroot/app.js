@@ -3,6 +3,7 @@ const warehouseId = document.querySelector("#warehouse-id");
 const message = document.querySelector("#result-message");
 const refreshButton = document.querySelector("#refresh-button");
 const operationButtons = [...document.querySelectorAll("form button")];
+let stockRequest = 0;
 
 function pairIsValid() {
   return productId.value && warehouseId.value && productId.checkValidity() && warehouseId.checkValidity();
@@ -19,48 +20,68 @@ async function readError(response) {
   return problem.code ? `${reason} (${problem.code})` : reason;
 }
 
-async function refreshStock() {
-  if (!pairIsValid()) {
-    setMessage("Укажите корректные идентификаторы товара и склада.", true);
-    return null;
-  }
-
-  const query = new URLSearchParams({ productId: productId.value, warehouseId: warehouseId.value });
-  const response = await fetch(`/api/stocks?${query}`);
-  if (!response.ok) throw new Error(await readError(response));
-
-  const stocks = await response.json();
-  const stock = stocks[0];
+function showStock(stock) {
   document.querySelector("#on-hand").textContent = stock?.onHand ?? "—";
   document.querySelector("#reserved").textContent = stock?.reserved ?? "—";
   document.querySelector("#available").textContent = stock?.available ?? "—";
-  return stock;
+}
+
+async function refreshStock(operationMessage, operationFailed = false) {
+  const request = ++stockRequest;
+  if (!pairIsValid()) {
+    showStock();
+    setMessage("Укажите корректные идентификаторы товара и склада.", true);
+    return;
+  }
+
+  const query = new URLSearchParams({ productId: Number(productId.value), warehouseId: Number(warehouseId.value) });
+  try {
+    const response = await fetch(`/api/stocks?${query}`);
+    if (!response.ok) throw new Error(await readError(response));
+
+    const [stock] = await response.json();
+    if (request !== stockRequest) return;
+    showStock(stock);
+    setMessage(operationMessage ?? (stock ? "Остаток загружен." : "Для этой пары операций пока нет."), operationFailed);
+  } catch {
+    if (request !== stockRequest) return;
+    showStock();
+    const refreshError = "Не удалось обновить остаток.";
+    setMessage(operationMessage ? `${operationMessage} ${refreshError}` : refreshError, true);
+  }
 }
 
 async function submitOnce(path, body, successText) {
+  if (refreshButton.disabled) return;
   if (!pairIsValid()) {
     setMessage("Сначала укажите корректные идентификаторы товара и склада.", true);
     return;
   }
 
-  refreshButton.disabled = true;
-  operationButtons.forEach(button => button.disabled = true);
+  ++stockRequest;
+  const controls = [productId, warehouseId, refreshButton, ...operationButtons];
+  controls.forEach(control => control.disabled = true);
   try {
-    const response = await fetch(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productId: Number(productId.value), warehouseId: Number(warehouseId.value), ...body })
-    });
-    if (!response.ok) throw new Error(await readError(response));
-    await response.json();
-    setMessage(successText);
-    await refreshStock();
-  } catch (error) {
-    setMessage(error.message || "Не удалось выполнить запрос.", true);
-    try { await refreshStock(); } catch { /* Keep the operation error visible. */ }
+    let operationMessage = successText;
+    let operationFailed = false;
+    try {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: Number(productId.value), warehouseId: Number(warehouseId.value), ...body })
+      });
+      if (!response.ok) {
+        operationFailed = true;
+        operationMessage = await readError(response);
+      }
+    } catch {
+      operationFailed = true;
+      operationMessage = "Не удалось подтвердить результат операции. Проверьте остаток перед повтором.";
+    }
+    setMessage(operationMessage, operationFailed);
+    await refreshStock(operationMessage, operationFailed);
   } finally {
-    refreshButton.disabled = false;
-    operationButtons.forEach(button => button.disabled = false);
+    controls.forEach(control => control.disabled = false);
   }
 }
 
@@ -69,27 +90,25 @@ document.querySelector("#supply-form").addEventListener("submit", event => {
   submitOnce("/api/supplies", {
     reference: document.querySelector("#reference").value,
     quantity: Number(document.querySelector("#supply-quantity").value)
-  }, "Приёмка подтверждена. Остаток обновлён.");
+  }, "Приёмка подтверждена.");
 });
 
 document.querySelector("#reservation-form").addEventListener("submit", event => {
   event.preventDefault();
   submitOnce("/api/reservations", {
     quantity: Number(document.querySelector("#reservation-quantity").value)
-  }, "Резерв создан. Остаток обновлён.");
+  }, "Резерв создан.");
 });
 
-refreshButton.addEventListener("click", async () => {
-  try {
-    const stock = await refreshStock();
-    if (stock) setMessage("Остаток загружен.");
-    else if (pairIsValid()) setMessage("Для этой пары операций пока нет.");
-  } catch (error) {
-    setMessage(error.message || "Не удалось загрузить остаток.", true);
-  }
-});
+refreshButton.addEventListener("click", () => refreshStock());
 
-[productId, warehouseId].forEach(input => input.addEventListener("change", () => {
-  if (!productId.value || !warehouseId.value) return;
-  refreshButton.click();
-}));
+[productId, warehouseId].forEach(input => {
+  input.addEventListener("input", () => {
+    ++stockRequest;
+    showStock();
+    setMessage("Выберите товар и склад для просмотра остатка.");
+  });
+  input.addEventListener("change", () => {
+    if (pairIsValid() && !refreshButton.disabled) refreshStock();
+  });
+});
