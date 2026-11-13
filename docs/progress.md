@@ -1,5 +1,15 @@
 # Состояние проекта
 
+## 2026-11-13 — Этап 1: основа API
+
+**Готово.** Созданы `MarketFlow.sln`, API на .NET 10, xUnit-проект с тестовым хостом и `compose.test.yaml` с PostgreSQL 17. API отвечает `GET /health`, Swagger UI и OpenAPI доступны в Development. SDK 10.0.404 установлен в `~/.dotnet` через официальный скрипт, системная установка не менялась.
+
+**Проверки.** Увиден RED: без маршрутов три smoke-проверки падали (`/health`, Swagger и подключение к отсутствующей тестовой БД). После исправления `docker compose -f compose.test.yaml up -d --wait`, `dotnet test MarketFlow.sln --no-restore` прошёл (3 проверки), `dotnet build MarketFlow.sln --no-restore` прошёл без предупреждений, `dotnet list MarketFlow.sln package --vulnerable --include-transitive` не нашёл уязвимых пакетов. Реальный API на `127.0.0.1:8080` также ответил на `/health`, Swagger UI и JSON спецификации. Docker Compose и PostgreSQL 17. Разработка проверялась только на macOS arm64.
+
+**Изменения.** README содержит команды запуска API и тестовой БД. OpenAPI.NET закреплён на исправленной версии 2.7.5 из-за известной уязвимости в 2.3.0. Superpowers-инструкции в доступном каталоге навыков этой сессии не обнаружены; TDD выполнен по `docs/testing.md`.
+
+**Следующий шаг.** Этап 2: товары и склады с миграцией EF Core, валидацией, поиском и интеграционными проверками на PostgreSQL.
+
 ## 2026-11-09 — BOOTSTRAP
 
 **Текущий этап.** BOOTSTRAP завершён. Владелец согласовал складской контракт и формат интерфейса. Реализация ожидает `GO`.

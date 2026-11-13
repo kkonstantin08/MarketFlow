@@ -1,0 +1,9 @@
+@MarketFlow.Api_HostAddress = http://localhost:5129
+
+GET {{MarketFlow.Api_HostAddress}}/health
+Accept: text/plain
+
+###
+
+GET {{MarketFlow.Api_HostAddress}}/swagger/v1/swagger.json
+Accept: application/json
